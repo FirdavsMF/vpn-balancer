@@ -18,14 +18,13 @@ import (
 func main() {
 	fmt.Println("=== VPN Balancer v0.3.0 ===")
 	fmt.Println("Author: FirdavsMF")
-	fmt.Println()
 
 	// Загружаем конфиги
 	sources := []string{
 		"https://raw.githack.com/igareck/vpn-configs-for-russia/main/WHITE-CIDR-RU-all.txt",
 	}
 
-	fmt.Println("Fetching VLESS configs...")
+	fmt.Println("\nFetching VLESS configs...")
 	urls, err := downloader.FetchAll(sources)
 	if err != nil {
 		fmt.Printf("Warning: Could not fetch remote configs: %v\n", err)
@@ -86,9 +85,8 @@ func main() {
 	// Запускаем health checker
 	checker.Start(ctx)
 
-	// Ждём первую проверку
 	fmt.Println("\nWaiting for initial health check (30 seconds)...")
-	fmt.Println("Press Ctrl+C to stop\n")
+	fmt.Println("Press Ctrl+C to stop")
 
 	// Выводим начальную статистику через 35 секунд
 	go func() {
