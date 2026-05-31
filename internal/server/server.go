@@ -51,13 +51,9 @@ func (s *Server) Connect(ctx context.Context, targetAddr string) (net.Conn, erro
 			targetAddr, s.VLESSConfig.Address, err)
 	}
 
-	// Измеряем RTT
 	s.UpdateRTT(time.Since(start))
-
-	// Увеличиваем счётчик соединений
 	s.IncrementConnections()
 
-	// Оборачиваем соединение для отслеживания закрытия
 	return &trackedConn{
 		Conn:   conn,
 		server: s,

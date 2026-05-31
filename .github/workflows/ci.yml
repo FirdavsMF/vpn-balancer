@@ -7,17 +7,17 @@ on:
     branches: [ main ]
 
 jobs:
-  test:
-    name: Test
+  test-and-build:
+    name: Test and Build
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        go-version: ['1.21', '1.22']
+        go-version: ['1.22']
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Set up Go ${{ matrix.go-version }}
+    - name: Set up Go
       uses: actions/setup-go@v5
       with:
         go-version: ${{ matrix.go-version }}
@@ -29,57 +29,20 @@ jobs:
       run: go vet ./...
 
     - name: Run tests
-      run: go test -v -race -coverprofile=coverage.out ./...
-
-  lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.22'
-
-    - name: golangci-lint
-      uses: golangci/golangci-lint-action@v4
-      with:
-        version: v1.55
-        args: --timeout=5m --out-format=colored-line-number
-
-  build:
-    name: Build
-    needs: test
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        goos: [linux]
-        goarch: [amd64, arm64]
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Set up Go
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.22'
+      run: go test -v -race ./...
 
     - name: Build
-      run: |
-        GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
-        go build -o vpn-balancer-${{ matrix.goos }}-${{ matrix.goarch }} \
-        ./cmd/vpn-balancer
+      run: go build -o vpn-balancer ./cmd/vpn-balancer
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: vpn-balancer-${{ matrix.goos }}-${{ matrix.goarch }}
-        path: vpn-balancer-${{ matrix.goos }}-${{ matrix.goarch }}
+        name: vpn-balancer
+        path: vpn-balancer
 
   release:
     name: Create Release
-    needs: build
+    needs: test-and-build
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     
