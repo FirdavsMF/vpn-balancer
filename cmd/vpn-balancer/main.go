@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/FirdavsMF/vpn-balancer/internal/downloader"
 	"github.com/FirdavsMF/vpn-balancer/internal/parser"
@@ -11,18 +13,16 @@ import (
 )
 
 func main() {
-	fmt.Println("=== VPN Balancer v0.1.0 ===")
+	fmt.Println("=== VPN Balancer v0.2.0 ===")
 	fmt.Println("Author: FirdavsMF")
 	fmt.Println()
 
-	// Источники конфигов
+	// Загружаем конфиги
 	sources := []string{
 		"https://raw.githack.com/igareck/vpn-configs-for-russia/main/WHITE-CIDR-RU-all.txt",
 	}
 
-	fmt.Println("Fetching VLESS configs from sources...")
-
-	// Загружаем конфиги
+	fmt.Println("Fetching VLESS configs...")
 	urls, err := downloader.FetchAll(sources)
 	if err != nil {
 		fmt.Printf("Error fetching configs: %v\n", err)
@@ -34,53 +34,66 @@ func main() {
 	// Парсим и создаём серверы
 	var servers []*server.Server
 	successCount := 0
-	failCount := 0
 
-	for i, url := range urls {
-		// Пропускаем строки, которые не являются VLESS URL
+	for _, url := range urls {
 		if !strings.HasPrefix(url, "vless://") {
 			continue
 		}
 
 		config, err := parser.Parse(url)
 		if err != nil {
-			fmt.Printf("[%d] Parse error: %v\n", i+1, err)
-			failCount++
 			continue
 		}
 
-		srv := server.NewServer(config)
+		srv, err := server.NewServer(config)
+		if err != nil {
+			continue
+		}
+
 		servers = append(servers, srv)
 		successCount++
-
-		fmt.Printf("[%d] %s\n", successCount, srv)
 	}
 
-	fmt.Println()
-	fmt.Printf("=== Summary ===\n")
-	fmt.Printf("Total lines: %d\n", len(urls))
-	fmt.Printf("Successfully parsed: %d\n", successCount)
-	fmt.Printf("Failed: %d\n", failCount)
-	fmt.Printf("Total servers: %d\n", len(servers))
+	fmt.Printf("Successfully created %d servers\n", len(servers))
 
-	// Показываем статистику по типам
+	// Тестируем подключение к первому серверу
+	if len(servers) > 0 {
+		fmt.Println("\n=== Testing VLESS Connection ===")
+		testServer := servers[0]
+		fmt.Printf("Testing server: %s\n", testServer)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		start := time.Now()
+		conn, err := testServer.Connect(ctx, "8.8.8.8:53")
+		if err != nil {
+			fmt.Printf("Connection failed: %v\n", err)
+		} else {
+			fmt.Printf("Connected successfully! RTT: %v\n", time.Since(start))
+			conn.Close()
+		}
+	}
+
+	// Статистика
+	fmt.Println("\n=== Server Statistics ===")
 	stats := make(map[string]int)
 	for _, srv := range servers {
 		stats[srv.Network]++
 		stats["security_"+srv.Security]++
 	}
 
-	fmt.Println("\nNetwork types:")
-	for network, count := range stats {
-		if !strings.HasPrefix(network, "security_") {
-			fmt.Printf("  %s: %d\n", network, count)
+	fmt.Println("Network types:")
+	for k, v := range stats {
+		if !strings.HasPrefix(k, "security_") {
+			fmt.Printf("  %s: %d\n", k, v)
 		}
 	}
 
 	fmt.Println("\nSecurity types:")
-	for security, count := range stats {
-		if strings.HasPrefix(security, "security_") {
-			fmt.Printf("  %s: %d\n", strings.TrimPrefix(security, "security_"), count)
+	for k, v := range stats {
+		if strings.HasPrefix(k, "security_") {
+			fmt.Printf("  %s: %d\n", strings.TrimPrefix(k, "security_"), v)
 		}
 	}
 }
