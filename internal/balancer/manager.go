@@ -6,6 +6,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/FirdavsMF/vpn-balancer/internal/health"
@@ -26,6 +27,9 @@ type Manager struct {
 
 	ctx    context.Context
 	cancel context.CancelFunc
+
+	// Graceful shutdown
+	shuttingDown atomic.Bool
 }
 
 // NewManager создаёт новый менеджер
@@ -57,7 +61,7 @@ func (m *Manager) AddServersFromURLs(urls []string) error {
 		m.servers = append(m.servers, srv)
 	}
 
-	log.Printf("Added %d servers", len(configs))
+	log.Printf("Manager: added %d servers", len(configs))
 	return nil
 }
 
@@ -66,24 +70,21 @@ func (m *Manager) StartHealthChecker(interval, timeout time.Duration) {
 	m.checker = health.NewChecker(interval, timeout)
 	m.checker.UpdateServers(m.servers)
 
-	// При изменении статуса обновляем балансировщик
 	m.checker.OnStatusChange = func(srv *server.Server, oldActive bool) {
 		if srv.IsActive() {
 			log.Printf("✅ Server UP: %s (RTT: %v)", srv.Name, srv.GetRTT())
 		} else {
 			log.Printf("❌ Server DOWN: %s", srv.Name)
 		}
-		// Обновляем список активных серверов в балансировщике
 		m.updateBalancer()
 	}
 
 	m.checker.Start(m.ctx)
 
-	// Запускаем периодическое обновление балансировщика
 	go m.periodicBalancerUpdate(interval)
 }
 
-// periodicBalancerUpdate периодически обновляет список серверов в балансировщике
+// periodicBalancerUpdate периодически обновляет список серверов
 func (m *Manager) periodicBalancerUpdate(interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -91,6 +92,9 @@ func (m *Manager) periodicBalancerUpdate(interval time.Duration) {
 	for {
 		select {
 		case <-ticker.C:
+			if m.shuttingDown.Load() {
+				return
+			}
 			m.updateBalancer()
 		case <-m.ctx.Done():
 			return
@@ -98,7 +102,7 @@ func (m *Manager) periodicBalancerUpdate(interval time.Duration) {
 	}
 }
 
-// updateBalancer обновляет список активных серверов в балансировщике
+// updateBalancer обновляет список активных серверов
 func (m *Manager) updateBalancer() {
 	if m.checker == nil {
 		return
@@ -107,7 +111,9 @@ func (m *Manager) updateBalancer() {
 	activeServers := m.checker.GetActiveServers()
 	m.balancer.Update(activeServers)
 
-	log.Printf("Balancer updated: %d active servers", len(activeServers))
+	if !m.shuttingDown.Load() {
+		log.Printf("Balancer: %d active servers", len(activeServers))
+	}
 }
 
 // StartProxy запускает SOCKS5 прокси
@@ -116,29 +122,46 @@ func (m *Manager) StartProxy(addr string) error {
 	return m.proxyServer.Start(addr)
 }
 
-// Stop останавливает все компоненты
-func (m *Manager) Stop() {
-	if m.proxyServer != nil {
-		m.proxyServer.Stop()
-	}
+// Shutdown выполняет graceful shutdown
+func (m *Manager) Shutdown() {
+	log.Println("Manager: initiating graceful shutdown...")
+	m.shuttingDown.Store(true)
+
+	// 1. Останавливаем health checker
 	if m.checker != nil {
+		log.Println("Manager: stopping health checker...")
 		m.checker.Stop()
 	}
+
+	// 2. Отменяем контекст
 	m.cancel()
+
+	// 3. Останавливаем SOCKS5 прокси (ждёт активные соединения)
+	if m.proxyServer != nil {
+		log.Println("Manager: stopping SOCKS5 proxy...")
+		m.proxyServer.Stop()
+	}
+
+	log.Println("Manager: shutdown complete")
+}
+
+// Stop останавливает все компоненты (для обратной совместимости)
+func (m *Manager) Stop() {
+	m.Shutdown()
 }
 
 // getDialer возвращает dialer для сервера выбранного балансировщиком
 func (m *Manager) getDialer() (vless.Dialer, error) {
-	// Выбираем сервер через балансировщик
 	srv := m.balancer.Pick()
 	if srv == nil {
 		return nil, fmt.Errorf("no active servers available")
 	}
 
-	log.Printf("Balancer: selected server %s (RTT: %v, connections: %d)",
-		srv.Name, srv.GetRTT(), srv.GetConnections())
+	if !m.shuttingDown.Load() {
+		log.Printf("Balancer: selected %s (RTT: %v, conns: %d)",
+			srv.Name, srv.GetRTT(), srv.GetConnections())
+	}
 
-	// Создаём новый dialer для выбранного сервера
 	return vless.NewVLESSDialer(srv.VLESSConfig)
 }
 
@@ -155,11 +178,17 @@ func (m *Manager) GetStats() map[string]interface{} {
 	m.mu.RUnlock()
 
 	stats["balancer_type"] = "round-robin"
+	stats["shutting_down"] = m.shuttingDown.Load()
+
+	if m.proxyServer != nil {
+		proxyStats := m.proxyServer.GetStats()
+		stats["proxy_active_connections"] = proxyStats["active_connections"]
+		stats["proxy_total_connections"] = proxyStats["total_connections"]
+	}
 
 	return stats
 }
 
-// parseURLs парсит список VLESS URL
 func parseURLs(urls []string) ([]*parser.VLESSConfig, error) {
 	var configs []*parser.VLESSConfig
 

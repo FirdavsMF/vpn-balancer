@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/FirdavsMF/vpn-balancer/internal/server"
@@ -22,6 +23,9 @@ type Checker struct {
 	totalChecks  int64
 	failedChecks int64
 	muStats      sync.RWMutex
+
+	// Флаг graceful shutdown
+	shuttingDown atomic.Bool
 
 	OnStatusChange func(srv *server.Server, oldActive bool)
 }
@@ -52,9 +56,11 @@ func (c *Checker) Start(ctx context.Context) {
 
 // Stop останавливает проверки
 func (c *Checker) Stop() {
+	log.Println("Health checker: stopping...")
+	c.shuttingDown.Store(true)
 	close(c.stopCh)
 	c.wg.Wait()
-	log.Println("Health checker stopped")
+	log.Println("Health checker: stopped")
 }
 
 func (c *Checker) run(ctx context.Context) {
@@ -63,11 +69,15 @@ func (c *Checker) run(ctx context.Context) {
 	ticker := time.NewTicker(c.interval)
 	defer ticker.Stop()
 
+	// Первая проверка
 	c.checkAllServers(ctx)
 
 	for {
 		select {
 		case <-ticker.C:
+			if c.shuttingDown.Load() {
+				return
+			}
 			c.checkAllServers(ctx)
 		case <-c.stopCh:
 			return
@@ -87,7 +97,10 @@ func (c *Checker) checkAllServers(ctx context.Context) {
 		return
 	}
 
-	log.Printf("Health check: starting check for %d servers", len(servers))
+	// Во время shutdown не логируем
+	if !c.shuttingDown.Load() {
+		log.Printf("Health check: checking %d servers", len(servers))
+	}
 
 	semaphore := make(chan struct{}, 10)
 	var wg sync.WaitGroup
@@ -105,7 +118,6 @@ func (c *Checker) checkAllServers(ctx context.Context) {
 
 			oldActive := s.IsActive()
 			isActive := c.checkServer(ctx, s)
-
 			s.SetActive(isActive)
 
 			muActive.Lock()
@@ -128,7 +140,9 @@ func (c *Checker) checkAllServers(ctx context.Context) {
 
 	wg.Wait()
 
-	log.Printf("Health check completed: %d/%d servers active", activeCount, len(servers))
+	if !c.shuttingDown.Load() {
+		log.Printf("Health check completed: %d/%d active", activeCount, len(servers))
+	}
 }
 
 func (c *Checker) checkServer(ctx context.Context, srv *server.Server) bool {
@@ -139,7 +153,9 @@ func (c *Checker) checkServer(ctx context.Context, srv *server.Server) bool {
 
 	conn, err := srv.Connect(checkCtx, "1.1.1.1:53")
 	if err != nil {
-		log.Printf("Health check failed for %s: %v", srv.Name, err)
+		if !c.shuttingDown.Load() {
+			log.Printf("Health check failed for %s: %v", srv.Name, err)
+		}
 		return false
 	}
 
@@ -147,7 +163,7 @@ func (c *Checker) checkServer(ctx context.Context, srv *server.Server) bool {
 	srv.UpdateRTT(rtt)
 	conn.Close()
 
-	log.Printf("Health check OK for %s (RTT: %v)", srv.Name, rtt)
+	log.Printf("Health check OK: %s (RTT: %v)", srv.Name, rtt)
 	return true
 }
 
@@ -199,7 +215,6 @@ func (c *Checker) GetServersByRTT() []*server.Server {
 	copy(servers, c.servers)
 	c.mu.RUnlock()
 
-	// Сортировка пузырьком по RTT
 	for i := 0; i < len(servers); i++ {
 		for j := i + 1; j < len(servers); j++ {
 			if servers[i].GetRTT() > servers[j].GetRTT() {
@@ -211,14 +226,11 @@ func (c *Checker) GetServersByRTT() []*server.Server {
 	return servers
 }
 
-// String возвращает строковое представление
 func (c *Checker) String() string {
 	stats := c.GetStats()
 	return fmt.Sprintf(
-		"Health Checker: %v active / %v total (checks: %v, failed: %v)",
+		"Health Checker: %v active / %v total",
 		stats["active_servers"],
 		stats["total_servers"],
-		stats["total_checks"],
-		stats["failed_checks"],
 	)
 }

@@ -14,16 +14,14 @@ import (
 
 func main() {
 	fmt.Println("╔══════════════════════════════════════╗")
-	fmt.Println("║     VPN Balancer v0.5.0             ║")
+	fmt.Println("║     VPN Balancer v0.6.0             ║")
 	fmt.Println("║     Author: FirdavsMF               ║")
-	fmt.Println("║     Round Robin + SOCKS5            ║")
+	fmt.Println("║     Graceful Shutdown + RR          ║")
 	fmt.Println("╚══════════════════════════════════════╝")
 	fmt.Println()
 
-	// Создаём менеджер
 	manager := balancer.NewManager()
 
-	// Источники конфигов
 	sources := []string{
 		"https://raw.githack.com/igareck/vpn-configs-for-russia/main/WHITE-CIDR-RU-all.txt",
 	}
@@ -38,18 +36,15 @@ func main() {
 
 	fmt.Printf("Downloaded %d lines\n", len(urls))
 
-	// Добавляем серверы
 	if err := manager.AddServersFromURLs(urls); err != nil {
 		log.Fatalf("Failed to add servers: %v", err)
 	}
 
-	// Запускаем health checker (каждые 60 секунд)
 	manager.StartHealthChecker(60*time.Second, 10*time.Second)
 
 	fmt.Println("\nWaiting for initial health check...")
 	time.Sleep(15 * time.Second)
 
-	// Запускаем SOCKS5 прокси
 	proxyAddr := ":1080"
 	if err := manager.StartProxy(proxyAddr); err != nil {
 		log.Fatalf("Failed to start SOCKS5 proxy: %v", err)
@@ -57,10 +52,9 @@ func main() {
 
 	fmt.Printf("\n✅ SOCKS5 proxy started on %s\n", proxyAddr)
 	fmt.Println("Configure your browser: SOCKS5 localhost:1080")
-	fmt.Println("Press Ctrl+C to stop")
+	fmt.Println("Press Ctrl+C for graceful shutdown")
 	fmt.Println()
 
-	// Периодический вывод статистики
 	go func() {
 		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()
@@ -69,13 +63,18 @@ func main() {
 		}
 	}()
 
-	// Ожидаем сигнал завершения
+	// Настраиваем обработку сигналов
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
 
-	fmt.Println("\nShutting down...")
-	manager.Stop()
+	// Ждём сигнал
+	sig := <-sigCh
+	fmt.Printf("\nReceived signal: %v\n", sig)
+	fmt.Println("Starting graceful shutdown...")
+
+	// Запускаем graceful shutdown
+	manager.Shutdown()
+
 	printStats(manager)
 	fmt.Println("Goodbye!")
 }
@@ -87,8 +86,9 @@ func printStats(manager *balancer.Manager) {
 	fmt.Println("╚══════════════════════════════════════╝")
 	fmt.Printf("Active servers: %v/%v\n", stats["active_servers"], stats["total_servers"])
 	fmt.Printf("Balancer type: %v\n", stats["balancer_type"])
+	fmt.Printf("Proxy active connections: %v\n", stats["proxy_active_connections"])
+	fmt.Printf("Proxy total connections: %v\n", stats["proxy_total_connections"])
 	fmt.Printf("Total health checks: %v\n", stats["total_checks"])
-	fmt.Printf("Failed health checks: %v\n", stats["failed_checks"])
 	fmt.Println()
 }
 
