@@ -14,9 +14,9 @@ import (
 
 func main() {
 	fmt.Println("╔══════════════════════════════════════╗")
-	fmt.Println("║     VPN Balancer v0.4.0             ║")
+	fmt.Println("║     VPN Balancer v0.5.0             ║")
 	fmt.Println("║     Author: FirdavsMF               ║")
-	fmt.Println("║     SOCKS5 Proxy + VLESS            ║")
+	fmt.Println("║     Round Robin + SOCKS5            ║")
 	fmt.Println("╚══════════════════════════════════════╝")
 	fmt.Println()
 
@@ -43,21 +43,22 @@ func main() {
 		log.Fatalf("Failed to add servers: %v", err)
 	}
 
-	// Запускаем health checker (каждые 60 секунд, таймаут 10 сек)
+	// Запускаем health checker (каждые 60 секунд)
 	manager.StartHealthChecker(60*time.Second, 10*time.Second)
 
 	fmt.Println("\nWaiting for initial health check...")
 	time.Sleep(15 * time.Second)
 
-	// Запускаем SOCKS5 прокси на порту 1080
+	// Запускаем SOCKS5 прокси
 	proxyAddr := ":1080"
 	if err := manager.StartProxy(proxyAddr); err != nil {
 		log.Fatalf("Failed to start SOCKS5 proxy: %v", err)
 	}
 
 	fmt.Printf("\n✅ SOCKS5 proxy started on %s\n", proxyAddr)
-	fmt.Println("Configure your browser to use SOCKS5 proxy: localhost:1080")
+	fmt.Println("Configure your browser: SOCKS5 localhost:1080")
 	fmt.Println("Press Ctrl+C to stop")
+	fmt.Println()
 
 	// Периодический вывод статистики
 	go func() {
@@ -81,10 +82,13 @@ func main() {
 
 func printStats(manager *balancer.Manager) {
 	stats := manager.GetStats()
-	fmt.Println("\n=== Statistics ===")
+	fmt.Println("\n╔══════════════════════════════════════╗")
+	fmt.Println("║        Server Statistics            ║")
+	fmt.Println("╚══════════════════════════════════════╝")
 	fmt.Printf("Active servers: %v/%v\n", stats["active_servers"], stats["total_servers"])
-	fmt.Printf("Total checks: %v\n", stats["total_checks"])
-	fmt.Printf("Failed checks: %v\n", stats["failed_checks"])
+	fmt.Printf("Balancer type: %v\n", stats["balancer_type"])
+	fmt.Printf("Total health checks: %v\n", stats["total_checks"])
+	fmt.Printf("Failed health checks: %v\n", stats["failed_checks"])
 	fmt.Println()
 }
 

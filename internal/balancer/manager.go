@@ -20,9 +20,9 @@ type Manager struct {
 	servers     []*server.Server
 	checker     *health.Checker
 	proxyServer *proxy.Socks5Server
+	balancer    Balancer
 
-	mu           sync.RWMutex
-	currentIndex int
+	mu sync.RWMutex
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -32,8 +32,9 @@ type Manager struct {
 func NewManager() *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Manager{
-		ctx:    ctx,
-		cancel: cancel,
+		ctx:      ctx,
+		cancel:   cancel,
+		balancer: NewRoundRobinBalancer(),
 	}
 }
 
@@ -65,15 +66,48 @@ func (m *Manager) StartHealthChecker(interval, timeout time.Duration) {
 	m.checker = health.NewChecker(interval, timeout)
 	m.checker.UpdateServers(m.servers)
 
+	// При изменении статуса обновляем балансировщик
 	m.checker.OnStatusChange = func(srv *server.Server, oldActive bool) {
 		if srv.IsActive() {
 			log.Printf("✅ Server UP: %s (RTT: %v)", srv.Name, srv.GetRTT())
 		} else {
 			log.Printf("❌ Server DOWN: %s", srv.Name)
 		}
+		// Обновляем список активных серверов в балансировщике
+		m.updateBalancer()
 	}
 
 	m.checker.Start(m.ctx)
+
+	// Запускаем периодическое обновление балансировщика
+	go m.periodicBalancerUpdate(interval)
+}
+
+// periodicBalancerUpdate периодически обновляет список серверов в балансировщике
+func (m *Manager) periodicBalancerUpdate(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			m.updateBalancer()
+		case <-m.ctx.Done():
+			return
+		}
+	}
+}
+
+// updateBalancer обновляет список активных серверов в балансировщике
+func (m *Manager) updateBalancer() {
+	if m.checker == nil {
+		return
+	}
+
+	activeServers := m.checker.GetActiveServers()
+	m.balancer.Update(activeServers)
+
+	log.Printf("Balancer updated: %d active servers", len(activeServers))
 }
 
 // StartProxy запускает SOCKS5 прокси
@@ -93,21 +127,18 @@ func (m *Manager) Stop() {
 	m.cancel()
 }
 
-// getDialer возвращает dialer для активного сервера
+// getDialer возвращает dialer для сервера выбранного балансировщиком
 func (m *Manager) getDialer() (vless.Dialer, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	if m.checker == nil {
-		return nil, fmt.Errorf("health checker not started")
-	}
-
-	activeServers := m.checker.GetActiveServers()
-	if len(activeServers) == 0 {
+	// Выбираем сервер через балансировщик
+	srv := m.balancer.Pick()
+	if srv == nil {
 		return nil, fmt.Errorf("no active servers available")
 	}
 
-	srv := activeServers[0]
+	log.Printf("Balancer: selected server %s (RTT: %v, connections: %d)",
+		srv.Name, srv.GetRTT(), srv.GetConnections())
+
+	// Создаём новый dialer для выбранного сервера
 	return vless.NewVLESSDialer(srv.VLESSConfig)
 }
 
@@ -122,6 +153,8 @@ func (m *Manager) GetStats() map[string]interface{} {
 	m.mu.RLock()
 	stats["total_servers_loaded"] = len(m.servers)
 	m.mu.RUnlock()
+
+	stats["balancer_type"] = "round-robin"
 
 	return stats
 }
