@@ -1,0 +1,52 @@
+# Конфигурация линтера для CI/CD
+linters-settings:
+  govet:
+    enable:
+      - shadow
+  golint:
+    min-confidence: 0.8
+  gocyclo:
+    min-complexity: 15
+  goconst:
+    min-len: 2
+    min-occurrences: 3
+  misspell:
+    locale: US
+  lll:
+    line-length: 140
+  prealloc:
+    simple: true
+    range-loops: true
+    for-loops: true
+
+linters:
+  disable-all: true
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gosec
+    - prealloc
+    - misspell
+    - unconvert
+    - goimports
+    - gocritic
+
+run:
+  timeout: 5m
+  tests: true
+  skip-dirs:
+    - vendor/
+    - .github/
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - errcheck
+        - gosec
