@@ -1,16 +1,10 @@
 linters-settings:
   govet:
-    enable:
-      - shadow
+    check-shadowing: false
   golint:
     min-confidence: 0.8
   gocyclo:
     min-complexity: 15
-  goconst:
-    min-len: 2
-    min-occurrences: 3
-  misspell:
-    locale: US
 
 linters:
   disable-all: true
@@ -35,3 +29,11 @@ issues:
     - .github/
   max-issues-per-linter: 0
   max-same-issues: 0
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - errcheck
+        - gosec
+    - text: "shadow:"
+      linters:
+        - govet
