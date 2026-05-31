@@ -18,8 +18,9 @@ vless://uuid3@server3.com:8080`
 	}
 	defer os.Remove(tmpfile.Name())
 
-	if _, err := tmpfile.WriteString(content); err != nil {
-		t.Fatal(err)
+	_, writeErr := tmpfile.WriteString(content)
+	if writeErr != nil {
+		t.Fatal(writeErr)
 	}
 	tmpfile.Close()
 
@@ -49,8 +50,9 @@ func TestFetchFromFileComments(t *testing.T) {
 	}
 	defer os.Remove(tmpfile.Name())
 
-	if _, err := tmpfile.WriteString(content); err != nil {
-		t.Fatal(err)
+	_, writeErr := tmpfile.WriteString(content)
+	if writeErr != nil {
+		t.Fatal(writeErr)
 	}
 	tmpfile.Close()
 
@@ -73,8 +75,9 @@ func TestFetchFromFileEmpty(t *testing.T) {
 	}
 	defer os.Remove(tmpfile.Name())
 
-	if _, err := tmpfile.WriteString(content); err != nil {
-		t.Fatal(err)
+	_, writeErr := tmpfile.WriteString(content)
+	if writeErr != nil {
+		t.Fatal(writeErr)
 	}
 	tmpfile.Close()
 
@@ -103,8 +106,9 @@ vless://uuid2@server2.com:8443#Server2
 	}
 	defer os.Remove(tmpfile.Name())
 
-	if _, err := tmpfile.WriteString(content); err != nil {
-		t.Fatal(err)
+	_, writeErr := tmpfile.WriteString(content)
+	if writeErr != nil {
+		t.Fatal(writeErr)
 	}
 	tmpfile.Close()
 
