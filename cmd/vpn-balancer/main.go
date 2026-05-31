@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -9,17 +10,18 @@ import (
 	"time"
 
 	"github.com/FirdavsMF/vpn-balancer/internal/balancer"
-	"github.com/FirdavsMF/vpn-balancer/internal/downloader"
+	"github.com/FirdavsMF/vpn-balancer/internal/watcher"
 )
 
 func main() {
 	fmt.Println("╔══════════════════════════════════════╗")
-	fmt.Println("║     VPN Balancer v0.6.0             ║")
+	fmt.Println("║     VPN Balancer v0.7.0             ║")
 	fmt.Println("║     Author: FirdavsMF               ║")
-	fmt.Println("║     Graceful Shutdown + RR          ║")
+	fmt.Println("║     Auto-Reload + RR + Graceful     ║")
 	fmt.Println("╚══════════════════════════════════════╝")
 	fmt.Println()
 
+	ctx := context.Background()
 	manager := balancer.NewManager()
 
 	sources := []string{
@@ -27,24 +29,21 @@ func main() {
 	}
 
 	fmt.Println("Fetching VLESS configs...")
-	urls, err := downloader.FetchAll(sources)
-	if err != nil {
-		log.Printf("Warning: Could not fetch remote configs: %v", err)
-		fmt.Println("Using local test configs...")
-		urls = getTestConfigs()
-	}
-
-	fmt.Printf("Downloaded %d lines\n", len(urls))
-
-	if err := manager.AddServersFromURLs(urls); err != nil {
+	if err := manager.AddServersFromURLs(sources); err != nil {
 		log.Fatalf("Failed to add servers: %v", err)
 	}
 
+	// Запускаем health checker
 	manager.StartHealthChecker(60*time.Second, 10*time.Second)
+
+	// Создаём и запускаем Reloader (каждые 5 минут)
+	reloader := watcher.NewReloader(5*time.Minute, sources, manager.Reload)
+	reloader.Start(ctx)
 
 	fmt.Println("\nWaiting for initial health check...")
 	time.Sleep(15 * time.Second)
 
+	// Запускаем SOCKS5 прокси
 	proxyAddr := ":1080"
 	if err := manager.StartProxy(proxyAddr); err != nil {
 		log.Fatalf("Failed to start SOCKS5 proxy: %v", err)
@@ -52,9 +51,12 @@ func main() {
 
 	fmt.Printf("\n✅ SOCKS5 proxy started on %s\n", proxyAddr)
 	fmt.Println("Configure your browser: SOCKS5 localhost:1080")
+	fmt.Println("Configs auto-reload every 5 minutes")
 	fmt.Println("Press Ctrl+C for graceful shutdown")
+	fmt.Println("Send SIGHUP for manual reload: kill -HUP <pid>")
 	fmt.Println()
 
+	// Периодический вывод статистики
 	go func() {
 		ticker := time.NewTicker(60 * time.Second)
 		defer ticker.Stop()
@@ -63,20 +65,34 @@ func main() {
 		}
 	}()
 
-	// Настраиваем обработку сигналов
+	// Обработка сигналов
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
-	// Ждём сигнал
-	sig := <-sigCh
-	fmt.Printf("\nReceived signal: %v\n", sig)
-	fmt.Println("Starting graceful shutdown...")
+	for {
+		sig := <-sigCh
+		switch sig {
+		case syscall.SIGHUP:
+			fmt.Println("\n📡 Received SIGHUP - manual reload...")
+			if err := reloader.ReloadNow(); err != nil {
+				log.Printf("Manual reload failed: %v", err)
+			} else {
+				fmt.Println("✅ Manual reload completed")
+				printStats(manager)
+			}
 
-	// Запускаем graceful shutdown
-	manager.Shutdown()
+		case syscall.SIGINT, syscall.SIGTERM:
+			fmt.Printf("\n📡 Received signal: %v\n", sig)
+			fmt.Println("Starting graceful shutdown...")
 
-	printStats(manager)
-	fmt.Println("Goodbye!")
+			reloader.Stop()
+			manager.Shutdown()
+
+			printStats(manager)
+			fmt.Println("Goodbye!")
+			return
+		}
+	}
 }
 
 func printStats(manager *balancer.Manager) {
@@ -85,16 +101,11 @@ func printStats(manager *balancer.Manager) {
 	fmt.Println("║        Server Statistics            ║")
 	fmt.Println("╚══════════════════════════════════════╝")
 	fmt.Printf("Active servers: %v/%v\n", stats["active_servers"], stats["total_servers"])
+	fmt.Printf("Loaded servers: %v\n", stats["total_servers_loaded"])
 	fmt.Printf("Balancer type: %v\n", stats["balancer_type"])
-	fmt.Printf("Proxy active connections: %v\n", stats["proxy_active_connections"])
-	fmt.Printf("Proxy total connections: %v\n", stats["proxy_total_connections"])
-	fmt.Printf("Total health checks: %v\n", stats["total_checks"])
+	fmt.Printf("Proxy connections: %v active / %v total\n",
+		stats["proxy_active_connections"], stats["proxy_total_connections"])
+	fmt.Printf("Health checks: %v total / %v failed\n",
+		stats["total_checks"], stats["failed_checks"])
 	fmt.Println()
-}
-
-func getTestConfigs() []string {
-	return []string{
-		"vless://9ca5cffb-19ea-45d9-a374-181b40f6bf0d@91.210.230.174:30547?encryption=none&security=reality&sni=ru.wikipedia.org&fp=chrome&type=tcp&flow=xtls-rprx-vision#RU-Moscow",
-		"vless://7f3e5a1b-2c4d-4e5f-8a9b-1c2d3e4f5a6b@176.57.210.85:28463?encryption=none&security=reality&sni=yandex.ru&fp=safari&type=tcp&flow=xtls-rprx-vision#RU-SPB",
-	}
 }
